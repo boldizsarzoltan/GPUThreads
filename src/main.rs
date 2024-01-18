@@ -1,9 +1,8 @@
 use std::ffi::c_void;
 use std::{ptr, thread};
 use std::collections::HashMap;
-use std::ptr::null;
-use std::sync::{Arc, Mutex, Condvar};
-use libc::c_int;
+use std::sync::{Arc, Mutex, Condvar, atomic::AtomicBool};
+use std::sync::atomic::Ordering;
 
 const PAUSE_TIME: u64 = 300;
 
@@ -21,13 +20,10 @@ extern "C" fn thread_function(data_ptr: *mut c_void) -> *mut c_void
         local_counter +=1 ;
         println!("Thread {} incremented to {}", data.thread_number, local_counter);
         thread::sleep(std::time::Duration::from_millis(PAUSE_TIME));
-        if(local_counter >= data.max_iterations) {
-            data.finished = Arc::from(true);
+        if(local_counter + 1 == data.max_iterations) {
+            data.finished.store(true, Ordering::SeqCst);
         }
     }
-    println!("Thread {} is {}", data.thread_number, data.finished);
-    println!("Thread {} notified main", data.thread_number);
-    thread::sleep(std::time::Duration::from_millis(PAUSE_TIME));
 
     println!("Thread {} exiting...", data.thread_number);
 
@@ -41,7 +37,7 @@ struct ThreadData {
     pub max_iterations: i32,
     pub pause_flag: Arc<Mutex<bool>>,
     pub start_var: Arc<Condvar>,
-    pub finished: Arc<bool>
+    pub finished: Arc<AtomicBool>
 }
 impl ThreadData {
     fn new(thread_number: i32, max_iterations: i32) -> Self {
@@ -49,7 +45,7 @@ impl ThreadData {
             thread_number,
             pause_flag: Arc::new(Mutex::new(true)),
             start_var: Arc::new(Condvar::new()),
-            finished: Arc::new(false),
+            finished: Arc::new(AtomicBool::default()),
             max_iterations,
         }
     }
@@ -102,26 +98,30 @@ fn main() {
             }
         }
     }
-
+    let mut y = 0;
     while !thread_ids.is_empty() {
+        println!("Loop {}", y);
         let mut i = 0;
         for threads in thread_ids.clone().keys() {
             let local_data = datas.get(&(i)).unwrap();
             println!("Main thread notfied {:?}", local_data.thread_number);
             thread::sleep(std::time::Duration::from_millis(PAUSE_TIME));
             local_data.start_var.notify_one();
-            let mut pause_flag = local_data.pause_flag.lock().unwrap();
             println!("Main thread returned {:?}", local_data.thread_number);
             thread::sleep(std::time::Duration::from_millis(PAUSE_TIME));
-            println!("Thread {} {:?}", threads, local_data);
-            if(*local_data.finished) {
+            let local_finished = local_data.finished.load(self::Ordering::SeqCst);
+            println!("Thread {} finished {}", local_data.thread_number, local_finished);
+            if(local_finished) {
                 println!("Thread {:?} finished", threads);
                 thread_ids.remove(&threads);
-                println!("Remaining {:?}", thread_ids);
                 thread::sleep(std::time::Duration::from_millis(PAUSE_TIME));
+            }
+            else {
+                local_data.pause_flag.lock().unwrap();
             }
             i += 1;
         }
+        y += 1;
     }
 
     // println!("Thread create:{:?}", thread);
